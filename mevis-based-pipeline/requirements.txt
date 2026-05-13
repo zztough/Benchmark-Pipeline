@@ -1,0 +1,7 @@
+# Recommended conda setup:
+#   conda create -n bench-pipeline python=3.10 -y
+#   conda activate bench-pipeline
+#   pip install -r requirements.txt
+#
+# SiliconFlow OpenAI-compatible client used by the extraction and VTG APIs.
+openai>=1.40.0
