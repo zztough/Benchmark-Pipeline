@@ -73,6 +73,7 @@ class QAExample:
     action: str = ""
     span: Optional[List[int]] = None
     direction_source: str = ""
+    evidence: Optional[Dict[str, Any]] = None
 
     def to_json_dict(self) -> Dict[str, Any]:
         return asdict(self)

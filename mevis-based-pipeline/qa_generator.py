@@ -46,7 +46,7 @@ class QAGenerator:
 
         entity_id, entity = self.rng.choice(viable)
         action = self.rng.choice(entity.actions)
-        direction, _stats = self.log_builder.infer_direction(entity.mask_sequence, action.span)
+        direction, stats = self.log_builder.infer_direction(entity.mask_sequence, action.span, video=video)
         verb = "finish" if self._is_plural(entity.name) else "finishes"
         possessive = "their" if self._is_plural(entity.name) else "its"
         question = f"After {entity.name} {verb} {action.action}, what is {possessive} movement direction relative to the camera?"
@@ -60,6 +60,7 @@ class QAGenerator:
             action=action.action,
             span=list(action.span),
             direction_source="self",
+            evidence=stats,
         )
 
     def _build_template_two(
@@ -88,7 +89,7 @@ class QAGenerator:
         if entity_a.name == entity_b.name:
             return None
         action = self.rng.choice(entity_a.actions)
-        direction, _stats = self.log_builder.infer_direction(entity_b.mask_sequence, action.span)
+        direction, stats = self.log_builder.infer_direction(entity_b.mask_sequence, action.span, video=video)
         be_verb = "are" if self._is_plural(entity_a.name) else "is"
         question = f"While {entity_a.name} {be_verb} {action.action}, what is the movement direction of {entity_b.name} relative to the camera?"
         answer = self._normalize_answer(direction)
@@ -102,6 +103,7 @@ class QAGenerator:
             action=action.action,
             span=list(action.span),
             direction_source="other",
+            evidence=stats,
         )
 
     def _normalize_answer(self, direction: str) -> str:

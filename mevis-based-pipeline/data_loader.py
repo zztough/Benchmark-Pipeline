@@ -76,6 +76,23 @@ class MeViSDataLoader:
             return []
         return sequence
 
+    def resolve_frame_path(self, video: VideoRecord, frame_index: int) -> Optional[Path]:
+        if video.image_root is None:
+            return None
+        if frame_index < 0 or frame_index >= len(video.frame_names):
+            return None
+
+        frame_name = video.frame_names[frame_index]
+        candidate_names = [frame_name]
+        if not Path(frame_name).suffix:
+            candidate_names.extend([f"{frame_name}.jpg", f"{frame_name}.jpeg", f"{frame_name}.png"])
+
+        for candidate_name in candidate_names:
+            candidate_path = video.image_root / candidate_name
+            if candidate_path.exists():
+                return candidate_path
+        return None
+
     def _parse_expressions(self, expressions_payload: Dict[str, dict]) -> Dict[str, ExpressionRecord]:
         expressions: Dict[str, ExpressionRecord] = {}
         for exp_id, exp_payload in expressions_payload.items():
