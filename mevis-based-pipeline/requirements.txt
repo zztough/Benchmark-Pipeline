@@ -5,3 +5,8 @@
 #
 # SiliconFlow OpenAI-compatible client used by the extraction and VTG APIs.
 openai>=1.40.0
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# Optional for --use-depth-anything:
+# install Depth Anything 3 from the official ByteDance-Seed/Depth-Anything-3 repo.

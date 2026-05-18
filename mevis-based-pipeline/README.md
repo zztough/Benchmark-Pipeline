@@ -19,7 +19,10 @@ python main.py \
   --data-root /home/zhaobing/MeViS/dataset/MeViSv2/valid_u \
   --output-dir /home/zhaobing/bench-pipeline/outputs/mevis_demo \
   --max-videos 5 \
-  --seed 42
+  --seed 42 \
+  --use-depth-anything \
+  --depth-model da3-large \
+  --depth-device cuda
 ```
 
 Outputs are written to:

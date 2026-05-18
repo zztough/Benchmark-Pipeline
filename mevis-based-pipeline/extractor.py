@@ -282,12 +282,21 @@ class MockVTGInterface:
 
 
 class StructuredLogBuilder:
-    def __init__(self, data_loader: MeViSDataLoader, llm: Optional[DeepSeekExtractionInterface] = None, vtg: Optional[QwenVTGInterface] = None):
+    def __init__(
+        self,
+        data_loader: MeViSDataLoader,
+        llm: Optional[DeepSeekExtractionInterface] = None,
+        vtg: Optional[QwenVTGInterface] = None,
+        depth_estimator: Optional[object] = None,
+    ):
         self.data_loader = data_loader
         self.llm = llm or DeepSeekExtractionInterface()
         self.vtg = vtg or QwenVTGInterface()
+        self.depth_estimator = depth_estimator
+        self._active_video: Optional[VideoRecord] = None
 
     def build_for_video(self, video: VideoRecord) -> Optional[StructuredLog]:
+        self._active_video = video
         entities: Dict[str, EntityLog] = {}
         seen_anno_ids = set()
         for exp_id, expression_record in video.expressions.items():
@@ -380,5 +389,19 @@ class StructuredLogBuilder:
 
         return StructuredLog(video_id=video.video_key, entities=entities)
 
-    def infer_direction(self, mask_sequence: Sequence[Optional[dict]], span: Tuple[int, int]) -> Tuple[str, Optional[dict]]:
-        return infer_direction_from_mask_span(mask_sequence, span)
+    def infer_direction(
+        self,
+        mask_sequence: Sequence[Optional[dict]],
+        span: Tuple[int, int],
+        video: Optional[VideoRecord] = None,
+    ) -> Tuple[str, Optional[dict]]:
+        active_video = video or self._active_video
+        frame_path_resolver = None
+        if active_video is not None:
+            frame_path_resolver = lambda frame_index: self.data_loader.resolve_frame_path(active_video, frame_index)
+        return infer_direction_from_mask_span(
+            mask_sequence,
+            span,
+            frame_path_resolver=frame_path_resolver,
+            depth_estimator=self.depth_estimator,
+        )
