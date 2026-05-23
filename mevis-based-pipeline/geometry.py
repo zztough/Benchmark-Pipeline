@@ -159,12 +159,12 @@ def compute_mask_depth_statistics(
     #     original_confidence_shape,
     #     getattr(confidence_map, "shape", None) if confidence_map is not None else None,
     # )
-    if image_path is not None and depth_estimator is not None and hasattr(depth_estimator, "save_depth_visualization"):
-        depth_estimator.save_depth_visualization(
-            depth_array,
-            image_path,
-            suffix=f"aligned_depth_{depth_array.shape[0]}x{depth_array.shape[1]}",
-        )
+    # if image_path is not None and depth_estimator is not None and hasattr(depth_estimator, "save_depth_visualization"):
+    #     depth_estimator.save_depth_visualization(
+    #         depth_array,
+    #         image_path,
+    #         suffix=f"aligned_depth_{depth_array.shape[0]}x{depth_array.shape[1]}",
+    #     )
 
     masked_depth = depth_array[mask_array]
     finite_depth = masked_depth[np.isfinite(masked_depth)]
@@ -187,6 +187,20 @@ def compute_mask_depth_statistics(
         valid_ratio=valid_ratio,
         confidence_mean=confidence_mean,
     )
+
+
+def save_mask_debug_image(mask: List[List[int]], output_path: Path) -> Optional[Path]:
+    import numpy as np
+    from PIL import Image
+
+    mask_array = np.asarray(mask, dtype=np.uint8)
+    if mask_array.size == 0:
+        return None
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    image = (mask_array > 0).astype(np.uint8) * 255
+    Image.fromarray(image, mode="L").save(output_path)
+    return output_path
 
 
 def _resize_array(array: Any, shape: Tuple[int, int]) -> Any:
@@ -212,29 +226,44 @@ def _infer_depth_direction(
     last_frame_path: Path,
     depth_estimator: object,
     depth_threshold: float,
+    context_frame_paths: Optional[Sequence[Path]] = None,
 ) -> Tuple[str, Optional[dict]]:
     first_mask = decode_rle_mask(first_rle)
     last_mask = decode_rle_mask(last_rle)
     if first_mask is None or last_mask is None:
         return "", None
 
-    prediction = depth_estimator.predict([first_frame_path, last_frame_path])
-    if len(prediction.depth_maps) < 2:
+    if context_frame_paths:
+        image_paths = list(context_frame_paths)
+        try:
+            first_depth_index = image_paths.index(first_frame_path)
+            last_depth_index = image_paths.index(last_frame_path)
+        except ValueError:
+            image_paths = [first_frame_path, last_frame_path]
+            first_depth_index = 0
+            last_depth_index = 1
+    else:
+        image_paths = [first_frame_path, last_frame_path]
+        first_depth_index = 0
+        last_depth_index = 1
+
+    prediction = depth_estimator.predict(image_paths)
+    if len(prediction.depth_maps) <= max(first_depth_index, last_depth_index):
         return "", None
 
     confidence_maps = prediction.confidence_maps or []
-    first_confidence = confidence_maps[0] if len(confidence_maps) > 0 else None
-    last_confidence = confidence_maps[1] if len(confidence_maps) > 1 else None
+    first_confidence = confidence_maps[first_depth_index] if len(confidence_maps) > first_depth_index else None
+    last_confidence = confidence_maps[last_depth_index] if len(confidence_maps) > last_depth_index else None
     first_depth_stats = compute_mask_depth_statistics(
         first_mask,
-        prediction.depth_maps[0],
+        prediction.depth_maps[first_depth_index],
         first_confidence,
         image_path=first_frame_path,
         depth_estimator=depth_estimator,
     )
     last_depth_stats = compute_mask_depth_statistics(
         last_mask,
-        prediction.depth_maps[1],
+        prediction.depth_maps[last_depth_index],
         last_confidence,
         image_path=last_frame_path,
         depth_estimator=depth_estimator,
@@ -252,7 +281,8 @@ def _infer_depth_direction(
         depth_dir = "backward"
 
     return depth_dir, {
-        "depth_source": "depth_anything_3",
+        "depth_source": getattr(depth_estimator, "source_name", type(depth_estimator).__name__),
+        "depth_context_frame_count": len(image_paths),
         "first_depth_mean": first_depth_stats.mean_depth,
         "last_depth_mean": last_depth_stats.mean_depth,
         "first_depth_median": first_depth_stats.median_depth,
@@ -285,6 +315,8 @@ def infer_direction_from_mask_span(
     depth_threshold: float = 0.08,
     frame_path_resolver: Optional[Callable[[int], Optional[Path]]] = None,
     depth_estimator: Optional[object] = None,
+    mask_debug_dir: Optional[Path] = None,
+    mask_debug_prefix: str = "",
 ) -> Tuple[str, Optional[dict]]:
     valid_frames = _pick_valid_frames(mask_sequence, span)
     if not valid_frames:
@@ -296,6 +328,17 @@ def infer_direction_from_mask_span(
     last_stats = extract_stats_from_rle(last_rle)
     if first_stats is None or last_stats is None:
         return "unknown", None
+
+    if mask_debug_dir is not None:
+        first_mask = decode_rle_mask(first_rle)
+        last_mask = decode_rle_mask(last_rle)
+        safe_prefix = mask_debug_prefix.strip("_")
+        if first_mask is not None:
+            first_name = f"{safe_prefix}__mask_f{first_index:05d}.png" if safe_prefix else f"mask_f{first_index:05d}.png"
+            save_mask_debug_image(first_mask, mask_debug_dir / first_name)
+        if last_mask is not None and last_index != first_index:
+            last_name = f"{safe_prefix}__mask_f{last_index:05d}.png" if safe_prefix else f"mask_f{last_index:05d}.png"
+            save_mask_debug_image(last_mask, mask_debug_dir / last_name)
 
     delta_x = (last_stats.centroid_x - first_stats.centroid_x) / max(float(first_stats.width), 1.0)
     area_ratio = (last_stats.area - first_stats.area) / max(float(first_stats.area), 1.0)
@@ -314,6 +357,19 @@ def infer_direction_from_mask_span(
         last_frame_path = frame_path_resolver(last_index)
         if first_frame_path is not None and last_frame_path is not None:
             try:
+                context_frame_paths = None
+                if getattr(depth_estimator, "use_span_context", False):
+                    valid_indices = [frame_index for frame_index, _rle in valid_frames]
+                    selector = getattr(depth_estimator, "select_frame_indices", None)
+                    if callable(selector):
+                        context_indices = selector(valid_indices, [first_index, last_index])
+                    else:
+                        context_indices = [first_index, last_index]
+                    context_frame_paths = []
+                    for frame_index in context_indices:
+                        frame_path = frame_path_resolver(frame_index)
+                        if frame_path is not None:
+                            context_frame_paths.append(frame_path)
                 depth_dir, depth_evidence = _infer_depth_direction(
                     first_rle,
                     last_rle,
@@ -321,10 +377,11 @@ def infer_direction_from_mask_span(
                     last_frame_path,
                     depth_estimator,
                     depth_threshold,
+                    context_frame_paths=context_frame_paths,
                 )
             except Exception as exc:
                 depth_evidence = {
-                    "depth_source": "depth_anything_3",
+                    "depth_source": getattr(depth_estimator, "source_name", type(depth_estimator).__name__),
                     "depth_error": str(exc),
                 }
 
@@ -349,7 +406,7 @@ def infer_direction_from_mask_span(
         "end_frame": last_index,
         "delta_x": delta_x,
         "area_ratio": area_ratio,
-        "depth_method": "depth_anything_3" if depth_estimator is not None else "mask_area_proxy",
+        "depth_method": getattr(depth_estimator, "source_name", type(depth_estimator).__name__) if depth_estimator is not None else "mask_area_proxy",
     }
     if depth_evidence is not None:
         evidence.update(depth_evidence)
