@@ -4,6 +4,7 @@ import logging
 import math
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from api_clients import DeepSeekExtractionInterface, QwenVTGInterface
@@ -288,11 +289,13 @@ class StructuredLogBuilder:
         llm: Optional[DeepSeekExtractionInterface] = None,
         vtg: Optional[QwenVTGInterface] = None,
         depth_estimator: Optional[object] = None,
+        mask_debug_dir: Optional[str | Path] = None,
     ):
         self.data_loader = data_loader
         self.llm = llm or DeepSeekExtractionInterface()
         self.vtg = vtg or QwenVTGInterface()
         self.depth_estimator = depth_estimator
+        self.mask_debug_dir = Path(mask_debug_dir) if mask_debug_dir is not None else None
         self._active_video: Optional[VideoRecord] = None
 
     def build_for_video(self, video: VideoRecord) -> Optional[StructuredLog]:
@@ -399,9 +402,14 @@ class StructuredLogBuilder:
         frame_path_resolver = None
         if active_video is not None:
             frame_path_resolver = lambda frame_index: self.data_loader.resolve_frame_path(active_video, frame_index)
+        mask_debug_prefix = ""
+        if active_video is not None:
+            mask_debug_prefix = f"{active_video.video_key}__span_{span[0]}_{span[1]}"
         return infer_direction_from_mask_span(
             mask_sequence,
             span,
             frame_path_resolver=frame_path_resolver,
             depth_estimator=self.depth_estimator,
+            mask_debug_dir=self.mask_debug_dir,
+            mask_debug_prefix=mask_debug_prefix,
         )

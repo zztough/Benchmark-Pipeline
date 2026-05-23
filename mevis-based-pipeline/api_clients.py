@@ -65,6 +65,13 @@ def _normalize_action_list(actions: Any) -> List[str]:
     return normalized
 
 
+def _write_vtg_response_log(response: Any, log_path: Path) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(response.model_dump_json(indent=2))
+        handle.write("\n")
+
+
 class DeepSeekExtractionInterface:
     def __init__(
         self,
@@ -141,6 +148,11 @@ class QwenVTGInterface:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: str = "Qwen/Qwen3.6-35B-A3B",
+        max_frames: int = 12,
+        max_tokens: int = 2048,
+        temperature: float = 0.0,
+        extra_body: Optional[Dict[str, Any]] = None,
+        response_log_path: Optional[Path | str] = None,
         client: Optional[OpenAI] = None,
     ):
         api_key = api_key or os.getenv("SILICONFLOW_API_KEY")
@@ -154,6 +166,11 @@ class QwenVTGInterface:
 
         self.client = client
         self.model = model
+        self.max_frames = max_frames
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.extra_body = extra_body or {}
+        self.response_log_path = Path(response_log_path) if response_log_path else None
 
     def ground_action_spans(
         self,
@@ -162,7 +179,7 @@ class QwenVTGInterface:
         query_text: Optional[str] = None,
         entity_name: Optional[str] = None,
     ) -> List[Tuple[int, int]]:
-        frame_records = self._build_frame_records(video_context)
+        frame_records = self._build_frame_records(video_context, max_frames=self.max_frames)
         if not frame_records:
             return []
 
@@ -174,18 +191,24 @@ class QwenVTGInterface:
             "You will receive sampled raw video frames in chronological order. "
             "Use only the visual content of these frames to infer when each action starts and ends; do not rely on masks, box tracks, or other auxiliary annotations. "
             "Assign one inclusive frame span to each action. "
-            "Return JSON only, with no explanation and no markdown. "
+            "Return JSON only, with no explanation, no markdown, no prose, and no reasoning text. "
             'The JSON schema must be: {"spans": [[start, end], ...]}. '
             "Spans must use original frame indices, be ordered, non-overlapping, and aligned to the actions order. "
-            "If uncertain, choose the most stable and plausible interval, and prefer contiguous spans."
+            "Use integers only. "
+            "The number of spans must exactly equal the number of actions. "
+            "If uncertain, choose the most stable and plausible interval, and prefer contiguous spans. "
+            "Keep the answer as short as possible; usually one compact JSON object is enough."
         )
         user_prompt = (
             "Ground the actions against the sampled raw frames below. "
             "The frames are ordered by time and each entry includes its original frame index. "
             "Use only the visual content in the images to judge the motion interval of each action. "
             "If a referring expression or entity name is provided, use it only as a brief textual anchor, not as additional visual evidence. "
-            "Keep the output strictly JSON.\n\n"
-            f"{json.dumps({'actions': list(actions), 'frame_count': len(frame_records), 'query_text': query_text, 'entity_name': entity_name}, ensure_ascii=False)}"
+            "Output exactly one JSON object and stop immediately after the closing brace. "
+            'Do not include keys other than "spans". '
+            "Do not include confidence, comments, analysis, or frame descriptions. "
+            'Example output for two actions: {"spans":[[0,12],[13,47]]}\n\n'
+            f"{json.dumps({'actions': list(actions), 'action_count': len(actions), 'sampled_frame_count': len(frame_records), 'query_text': query_text, 'entity_name': entity_name}, ensure_ascii=False)}"
         )
 
         try:
@@ -193,11 +216,17 @@ class QwenVTGInterface:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": self._build_multimodal_user_content(user_prompt, frame_records)},
             ]
-            response = self.client.chat.completions.create(
-                model=self.model,
-                temperature=0,
-                messages=messages,
-            )
+            request_kwargs = {
+                "model": self.model,
+                "temperature": self.temperature,
+                "messages": messages,
+                "max_tokens": self.max_tokens,
+            }
+            if self.extra_body:
+                request_kwargs["extra_body"] = self.extra_body
+            response = self.client.chat.completions.create(**request_kwargs)
+            if self.response_log_path:
+                _write_vtg_response_log(response, self.response_log_path)
             content = response.choices[0].message.content or ""
             payload = _extract_json_object(content)
             spans = self._normalize_spans(payload.get("spans", payload), len(actions), frame_records)
